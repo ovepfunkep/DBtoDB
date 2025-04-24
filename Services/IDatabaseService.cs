@@ -29,4 +29,25 @@ public interface IDatabaseService
         bool useCache = false,
         int? cacheMinutes = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a SQL query asynchronously and returns the results.
+    /// </summary>
+    /// <param name="sqlQuery">The SQL query to execute.</param>
+    /// <param name="parameters">Optional parameters for the query.</param>
+    /// <param name="useCache">Whether to cache the results.</param>
+    /// <param name="cacheMinutes">Optional cache duration in minutes.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>
+    /// A collection of dictionaries where each dictionary represents a row,
+    /// with column names as keys and column values as values.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">When sqlQuery is null.</exception>
+    /// <exception cref="InvalidOperationException">When the database operation fails.</exception>
+    Task<IEnumerable<Dictionary<string, object>>> ExecuteSqlQueryAsync(
+        string sqlQuery,
+        Dictionary<string, object>? parameters = null,
+        bool useCache = false,
+        int? cacheMinutes = null,
+        CancellationToken cancellationToken = default);
 } 

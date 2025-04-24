@@ -36,9 +36,9 @@ BEGIN
     SELECT *
     INTO api_response
     FROM http_post(
-        url := api_url,
-        body := request_body::text,
-        content_type := 'application/json'
+        url => api_url,
+        body => request_body::text,
+        content_type => 'application/json'
     );
 
     -- Check for HTTP errors
@@ -67,6 +67,9 @@ Parameters:
 - params: JSONB object containing procedure parameters (optional)
 - use_cache: Whether to cache the results (optional, default false)
 - cache_minutes: How long to cache the results in minutes (optional)
+
+Note: To set the HTTP request timeout, run this before calling the function:
+SET http.timeout_ms = 30000;  -- 30 seconds = 30000 milliseconds
 
 Example usage:
 SELECT * FROM exec_sqlserver_proc(

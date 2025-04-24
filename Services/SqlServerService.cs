@@ -6,7 +6,7 @@ namespace DBtoDB.Services;
 
 /// <summary>
 /// SQL Server implementation of the database service.
-/// Provides functionality to execute stored procedures with caching support.
+/// Provides functionality to execute stored procedures and SQL queries with caching support.
 /// </summary>
 public class SqlServerService : IDatabaseService
 {
@@ -44,11 +44,10 @@ public class SqlServerService : IDatabaseService
         int? cacheMinutes = null,
         CancellationToken cancellationToken = default)
     {
-        // Validate input
         if (string.IsNullOrEmpty(procedureName))
             throw new ArgumentNullException(nameof(procedureName));
 
-        var cacheKey = GetCacheKey(procedureName, parameters);
+        var cacheKey = GetCacheKey("SP_" + procedureName, parameters);
         
         // Try to get results from cache if caching is enabled
         if (useCache && _cache.TryGetValue(cacheKey, out IEnumerable<Dictionary<string, object>>? cachedResult))
@@ -57,7 +56,6 @@ public class SqlServerService : IDatabaseService
             return cachedResult!;
         }
 
-        // Set up the database connection and command
         using var connection = new SqlConnection(_connectionString);
         using var command = new SqlCommand(procedureName, connection)
         {
@@ -65,18 +63,10 @@ public class SqlServerService : IDatabaseService
             CommandTimeout = _commandTimeout
         };
 
-        // Add parameters to the command if provided
-        if (parameters != null)
-        {
-            foreach (var param in parameters)
-            {
-                command.Parameters.AddWithValue(param.Key, param.Value ?? DBNull.Value);
-            }
-        }
+        AddParametersToCommand(command, parameters);
 
         try
         {
-            // Execute the stored procedure
             await connection.OpenAsync(cancellationToken);
             using var reader = await command.ExecuteReaderAsync(cancellationToken);
             var results = await ReadResultsAsync(reader, cancellationToken);
@@ -84,11 +74,7 @@ public class SqlServerService : IDatabaseService
             // Cache the results if caching is enabled
             if (useCache)
             {
-                var cacheTimeout = TimeSpan.FromMinutes(
-                    cacheMinutes ?? 
-                    _configuration.GetValue<int>("DatabaseSettings:CacheTimeoutMinutes"));
-                
-                _cache.Set(cacheKey, results, cacheTimeout);
+                CacheResults(cacheKey, results, cacheMinutes);
                 _logger.LogInformation("Cached results for procedure: {ProcedureName}", procedureName);
             }
 
@@ -98,6 +84,57 @@ public class SqlServerService : IDatabaseService
         {
             _logger.LogError(ex, "Error executing stored procedure: {ProcedureName}", procedureName);
             throw new InvalidOperationException($"Failed to execute stored procedure: {procedureName}", ex);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<IEnumerable<Dictionary<string, object>>> ExecuteSqlQueryAsync(
+        string sqlQuery,
+        Dictionary<string, object>? parameters = null,
+        bool useCache = false,
+        int? cacheMinutes = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(sqlQuery))
+            throw new ArgumentNullException(nameof(sqlQuery));
+
+        var cacheKey = GetCacheKey("SQL_" + sqlQuery, parameters);
+        
+        // Try to get results from cache if caching is enabled
+        if (useCache && _cache.TryGetValue(cacheKey, out IEnumerable<Dictionary<string, object>>? cachedResult))
+        {
+            _logger.LogInformation("Cache hit for SQL query: {SqlQuery}", sqlQuery);
+            return cachedResult!;
+        }
+
+        using var connection = new SqlConnection(_connectionString);
+        using var command = new SqlCommand(sqlQuery, connection)
+        {
+            CommandType = CommandType.Text,
+            CommandTimeout = _commandTimeout
+        };
+
+        AddParametersToCommand(command, parameters);
+
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var results = await ReadResultsAsync(reader, cancellationToken);
+
+            // Cache the results if caching is enabled
+            if (useCache)
+            {
+                CacheResults(cacheKey, results, cacheMinutes);
+                _logger.LogInformation("Cached results for SQL query: {SqlQuery}", sqlQuery);
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error executing SQL query: {SqlQuery}", sqlQuery);
+            throw new InvalidOperationException($"Failed to execute SQL query: {sqlQuery}", ex);
         }
     }
 
@@ -131,21 +168,51 @@ public class SqlServerService : IDatabaseService
     }
 
     /// <summary>
-    /// Generates a unique cache key for a stored procedure call based on its name and parameters.
+    /// Adds parameters to a SQL command.
     /// </summary>
-    /// <param name="procedureName">The name of the stored procedure.</param>
-    /// <param name="parameters">The parameters passed to the stored procedure.</param>
+    /// <param name="command">The command to add parameters to.</param>
+    /// <param name="parameters">The parameters to add.</param>
+    private void AddParametersToCommand(SqlCommand command, Dictionary<string, object>? parameters)
+    {
+        if (parameters == null) return;
+
+        foreach (var param in parameters)
+        {
+            command.Parameters.AddWithValue(param.Key, param.Value ?? DBNull.Value);
+        }
+    }
+
+    /// <summary>
+    /// Caches the results of a query or stored procedure.
+    /// </summary>
+    /// <param name="cacheKey">The cache key to use.</param>
+    /// <param name="results">The results to cache.</param>
+    /// <param name="cacheMinutes">Optional cache duration in minutes.</param>
+    private void CacheResults(string cacheKey, IEnumerable<Dictionary<string, object>> results, int? cacheMinutes)
+    {
+        var cacheTimeout = TimeSpan.FromMinutes(
+            cacheMinutes ?? 
+            _configuration.GetValue<int>("DatabaseSettings:CacheTimeoutMinutes"));
+        
+        _cache.Set(cacheKey, results, cacheTimeout);
+    }
+
+    /// <summary>
+    /// Generates a unique cache key for a database operation based on its name and parameters.
+    /// </summary>
+    /// <param name="operationName">The name of the operation (stored procedure or SQL query).</param>
+    /// <param name="parameters">The parameters passed to the operation.</param>
     /// <returns>A string that can be used as a cache key.</returns>
-    private static string GetCacheKey(string procedureName, Dictionary<string, object>? parameters)
+    private static string GetCacheKey(string operationName, Dictionary<string, object>? parameters)
     {
         if (parameters == null || !parameters.Any())
-            return procedureName;
+            return operationName;
 
         // Create a deterministic string from parameters
         var paramString = string.Join("_", 
             parameters.OrderBy(p => p.Key)
                      .Select(p => $"{p.Key}={p.Value}"));
         
-        return $"{procedureName}_{paramString}";
+        return $"{operationName}_{paramString}";
     }
 } 
